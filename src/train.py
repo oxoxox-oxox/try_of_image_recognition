@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from models.cnn_model import SimpleCNN
+from models.cnn_model import ImprovedCNN
 import argparse
 
 def train_model():
@@ -13,14 +13,20 @@ def train_model():
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--scheduler', type=str, default='cosine')
     args = parser.parse_args()
     
     # 数据预处理
     transform = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
+    transforms.Resize((32, 32)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomCrop(32, padding=4),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+])
+
     
     # 加载数据集 (这里使用CIFAR-10作为示例)
     train_dataset = datasets.CIFAR10(root='./data', train=True, 
@@ -30,9 +36,16 @@ def train_model():
     
     # 初始化模型
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SimpleCNN(num_classes=10).to(device)
+    model = ImprovedCNN(num_classes=10).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+
+    if args.scheduler == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    else:
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
     
     # 训练循环
     for epoch in range(args.epochs):
