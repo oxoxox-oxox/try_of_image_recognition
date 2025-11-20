@@ -33,18 +33,32 @@ def predict_image(image_path, model_path, num_classes=10):
 
 
 def predict_folder(folder_path, model_path, num_classes=10):
-    # CIFAR-10 类名
     class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = ImprovedCNN(num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
 
     for filename in os.listdir(folder_path):
         file_path = os.path.join(folder_path, filename)
-
         if os.path.isfile(file_path) and file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             print(f"\n正在处理：{filename}")
+            image = Image.open(file_path)
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            image_tensor = val_transform(image).unsqueeze(0).to(device)
 
-            pred, conf = predict_image(file_path, model_path, num_classes)
+            with torch.no_grad():
+                outputs = model(image_tensor)
+                probs = F.softmax(outputs, dim=1)
+                pred = torch.argmax(probs, dim=1).item()
+                conf = probs[0][pred].item()
+
             print(f"预测结果：{class_names[pred]}")
             print(f"置信度：{conf:.4f} ({conf*100:.2f}%)")
+
 
 
 def main():

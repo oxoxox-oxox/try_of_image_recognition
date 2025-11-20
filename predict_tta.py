@@ -5,38 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 
+from src.models.cnn_model import ImprovedCNN
+from src.utils.transforms import val_transform, train_transform, val_transform_tta, vot_argument_tta 
 
-class SimpleCNN(nn.Module):
-    def __init__(self, num_classes=10):
-        super(SimpleCNN, self).__init__()
-        # 增加卷积层和通道数
-        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(128)
-        self.conv3 = nn.Conv2d(128, 256, 3, padding=1)
-        self.bn3 = nn.BatchNorm2d(256)
-
-        self.pool = nn.MaxPool2d(2, 2)
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-
-        # 修改全连接层
-        self.fc1 = nn.Linear(256, 512)
-        self.fc2 = nn.Linear(512, num_classes)
-        self.dropout = nn.Dropout(0.3)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.bn1(self.conv1(x))))
-        x = self.pool(F.relu(self.bn2(self.conv2(x))))
-        x = self.pool(F.relu(self.bn3(self.conv3(x))))
-
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
 
 
 def predict_image(image_path, model_path, num_classes=10):
@@ -47,19 +18,11 @@ def predict_image(image_path, model_path, num_classes=10):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 加载模型
-    model = SimpleCNN(num_classes=num_classes)
+    model = ImprovedCNN(num_classes=num_classes)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()  # 设置为评估模式
 
-    # 图像预处理（预测阶段使用确定性转换）
-    transform = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.CenterCrop(32),  # 使用中心裁剪代替随机裁剪
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2023, 0.1994, 0.2010))
-    ])
 
     # 加载和预处理图像
     image = Image.open(image_path)
@@ -67,7 +30,7 @@ def predict_image(image_path, model_path, num_classes=10):
     if image.mode != 'RGB':
         image = image.convert('RGB')
 
-    image_tensor = transform(image).unsqueeze(0)  # 添加批次维度
+    image_tensor = val_transform(image).unsqueeze(0)  # 添加批次维度
     image_tensor = image_tensor.to(device)
 
     # 预测
@@ -90,29 +53,11 @@ def predict_image_with_tta(image_path, model_path, num_classes=10, num_augmentat
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 加载模型
-    model = SimpleCNN(num_classes=num_classes)
+    model = ImprovedCNN(num_classes=num_classes)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
 
-    # 基础转换（无随机性）
-    base_transform = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2023, 0.1994, 0.2010))
-    ])
-
-    # 增强转换（包含随机性）
-    aug_transform = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomCrop(32, padding=4),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2023, 0.1994, 0.2010))
-    ])
 
     # 加载图像
     image = Image.open(image_path)
@@ -123,14 +68,14 @@ def predict_image_with_tta(image_path, model_path, num_classes=10, num_augmentat
 
     with torch.no_grad():
         # 首先使用基础转换（无增强）进行一次预测
-        base_tensor = base_transform(image).unsqueeze(0).to(device)
+        base_tensor = val_transform(image).unsqueeze(0).to(device)
         base_output = model(base_tensor)
         base_probs = F.softmax(base_output, dim=1)
         all_probabilities.append(base_probs)
 
         # 然后进行多次增强预测
         for i in range(num_augmentations - 1):
-            aug_tensor = aug_transform(image).unsqueeze(0).to(device)
+            aug_tensor = val_transform_tta(image).unsqueeze(0).to(device)
             aug_output = model(aug_tensor)
             aug_probs = F.softmax(aug_output, dim=1)
             all_probabilities.append(aug_probs)
@@ -150,35 +95,11 @@ def predict_image_ensemble(image_path, model_path, num_classes=10, num_augmentat
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = SimpleCNN(num_classes=num_classes)
+    model = ImprovedCNN(num_classes=num_classes)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
 
-    # 定义多个不同的增强策略
-    augmentations = [
-        transforms.Compose([
-            transforms.Resize((32, 32)),
-            transforms.RandomHorizontalFlip(p=0.0),  # 无翻转
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                 (0.2023, 0.1994, 0.2010))
-        ]),
-        transforms.Compose([
-            transforms.Resize((32, 32)),
-            transforms.RandomHorizontalFlip(p=1.0),  # 强制翻转
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                 (0.2023, 0.1994, 0.2010))
-        ]),
-        transforms.Compose([
-            transforms.Resize((32, 32)),
-            transforms.RandomCrop(32, padding=2),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                 (0.2023, 0.1994, 0.2010))
-        ])
-    ]
 
     image = Image.open(image_path)
     if image.mode != 'RGB':
@@ -188,7 +109,7 @@ def predict_image_ensemble(image_path, model_path, num_classes=10, num_augmentat
     confidences = []
 
     with torch.no_grad():
-        for transform in augmentations:
+        for transform in vot_argument_tta():
             for i in range(num_augmentations):
                 tensor = transform(image).unsqueeze(0).to(device)
                 output = model(tensor)
@@ -304,7 +225,7 @@ def main():
     """
     # 指定路径
     folder_path = r'.\data\photo'
-    model_path = r'model.pth'
+    model_path = r'best_model.pth'
     num_classes = 10
 
     # 选择预测模式:
