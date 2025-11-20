@@ -2,7 +2,7 @@ import os
 import torch
 from PIL import Image
 from src.models.cnn_model import ImprovedCNN
-from src.utils.transforms import test_transform
+from src.utils.transforms import val_transform
 import torch.nn.functional as F
 
 
@@ -20,7 +20,7 @@ def predict_image(image_path, model_path, num_classes=10):
     if image.mode != 'RGB':
         image = image.convert('RGB')
 
-    image_tensor = test_transform(image).unsqueeze(0).to(device)
+    image_tensor = val_transform(image).unsqueeze(0).to(device)
 
     # 3. 推理
     with torch.no_grad():
@@ -49,7 +49,7 @@ def predict_folder(folder_path, model_path, num_classes=10):
 
 def main():
     folder_path = r'./data/photo'
-    model_path = r'model.pth'
+    model_path = r'final_model.pth'
     num_classes = 10
 
     predict_folder(folder_path, model_path, num_classes)
