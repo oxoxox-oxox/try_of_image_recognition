@@ -1,34 +1,57 @@
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
-import torch.nn as nn
 import torch.nn.functional as F
 import os
+import sys
+
+# 将项目根目录添加到Python搜索路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, project_root)
 
 from src.models.cnn_model import ImprovedCNN
-from src.utils.transforms import val_transform, train_transform, val_transform_tta, vot_argument_tta 
+from src.utils.transforms import val_transform, val_transform_tta, vot_argument_tta
 
+
+def load_model(model_path, num_classes=10):
+    """
+    加载模型
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = ImprovedCNN(num_classes=num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()  # 设置为评估模式
+    return model, device
+
+
+def load_and_preprocess_image(image_path):
+    """
+    加载和预处理图像
+    """
+    try:
+        image = Image.open(image_path)
+        # 如果图像是灰度图，转换为RGB
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        return image
+    except Exception as e:
+        print(f"加载图像失败: {e}")
+        return None
 
 
 def predict_image(image_path, model_path, num_classes=10):
     """
     普通预测函数（无随机性）
     """
-    # 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     # 加载模型
-    model = ImprovedCNN(num_classes=num_classes)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()  # 设置为评估模式
-
+    model, device = load_model(model_path, num_classes)
 
     # 加载和预处理图像
-    image = Image.open(image_path)
-    # 如果图像是灰度图，转换为RGB
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
+    image = load_and_preprocess_image(image_path)
+    if image is None:
+        return None, 0.0
 
     image_tensor = val_transform(image).unsqueeze(0)  # 添加批次维度
     image_tensor = image_tensor.to(device)
@@ -37,7 +60,7 @@ def predict_image(image_path, model_path, num_classes=10):
     with torch.no_grad():
         outputs = model(image_tensor)
         _, predicted = torch.max(outputs, 1)
-        probabilities = torch.nn.functional.softmax(outputs, dim=1)
+        probabilities = F.softmax(outputs, dim=1)
 
     # 获取预测结果
     predicted_class = predicted.item()
@@ -50,19 +73,13 @@ def predict_image_with_tta(image_path, model_path, num_classes=10, num_augmentat
     """
     使用测试时数据增强（TTA）进行预测
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     # 加载模型
-    model = ImprovedCNN(num_classes=num_classes)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()
-
+    model, device = load_model(model_path, num_classes)
 
     # 加载图像
-    image = Image.open(image_path)
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
+    image = load_and_preprocess_image(image_path)
+    if image is None:
+        return None, 0.0
 
     all_probabilities = []
 
@@ -93,23 +110,19 @@ def predict_image_ensemble(image_path, model_path, num_classes=10, num_augmentat
     """
     另一种TTA实现：投票机制 + 平均置信度
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # 加载模型
+    model, device = load_model(model_path, num_classes)
 
-    model = ImprovedCNN(num_classes=num_classes)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()
-
-
-    image = Image.open(image_path)
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
+    # 加载图像
+    image = load_and_preprocess_image(image_path)
+    if image is None:
+        return None, 0.0
 
     predictions = []
     confidences = []
 
     with torch.no_grad():
-        for transform in vot_argument_tta():
+        for transform in vot_argument_tta:
             for i in range(num_augmentations):
                 tensor = transform(image).unsqueeze(0).to(device)
                 output = model(tensor)
@@ -141,6 +154,16 @@ def predict_folder(folder_path, model_path, num_classes=10, mode="normal"):
         num_classes: 类别数量
         mode: 预测模式 ("normal", "tta", "ensemble")
     """
+    # 检查文件夹是否存在
+    if not os.path.exists(folder_path):
+        print(f"错误: 文件夹 {folder_path} 不存在")
+        return
+    
+    # 检查模型文件是否存在
+    if not os.path.exists(model_path):
+        print(f"错误: 模型文件 {model_path} 不存在")
+        return
+
     # CIFAR-10 的类别名称
     if num_classes == 10:
         class_names = ['飞机', '汽车', '鸟', '猫', '鹿', '狗', '青蛙', '马', '船', '卡车']
@@ -149,6 +172,8 @@ def predict_folder(folder_path, model_path, num_classes=10, mode="normal"):
 
     # 统计结果
     total_images = 0
+    processed_images = 0
+    failed_images = 0
     results = []
 
     # 遍历文件夹中的所有文件
@@ -176,24 +201,34 @@ def predict_folder(folder_path, model_path, num_classes=10, mode="normal"):
                     file_path, model_path, num_classes)
                 method = "普通预测"
 
-            result = {
-                'filename': filename,
-                'predicted_class': predicted_class,
-                'class_name': class_names[predicted_class],
-                'confidence': confidence,
-                'method': method
-            }
-            results.append(result)
+            # 检查预测是否成功
+            if predicted_class is not None:
+                processed_images += 1
+                result = {
+                    'filename': filename,
+                    'predicted_class': predicted_class,
+                    'class_name': class_names[predicted_class],
+                    'confidence': confidence,
+                    'method': method
+                }
+                results.append(result)
 
-            print(f"图像: {filename}")
-            print(f"预测方法: {method}")
-            print(f"预测结果: {class_names[predicted_class]}")
-            print(f"置信度: {confidence:.4f} ({confidence*100:.2f}%)")
-            print("-" * 50)
+                print(f"图像: {filename}")
+                print(f"预测方法: {method}")
+                print(f"预测结果: {class_names[predicted_class]}")
+                print(f"置信度: {confidence:.4f} ({confidence*100:.2f}%)")
+                print("-" * 50)
+            else:
+                failed_images += 1
+                print(f"图像: {filename}")
+                print("预测失败")
+                print("-" * 50)
 
     # 打印统计信息
     print("\n" + "="*60)
     print(f"预测完成！总共处理了 {total_images} 张图像")
+    print(f"成功预测: {processed_images} 张")
+    print(f"预测失败: {failed_images} 张")
     print(f"预测模式: {mode}")
 
     # 显示置信度统计
@@ -215,7 +250,7 @@ def predict_folder(folder_path, model_path, num_classes=10, mode="normal"):
                 class_name, 0) + 1
 
         for class_name, count in class_distribution.items():
-            percentage = (count / total_images) * 100
+            percentage = (count / processed_images) * 100 if processed_images > 0 else 0
             print(f"  {class_name}: {count} 张 ({percentage:.1f}%)")
 
 
@@ -239,8 +274,13 @@ def main():
     print(f"模型文件: {model_path}")
     print("="*60)
 
-    # 调用函数进行遍历识别
-    predict_folder(folder_path, model_path, num_classes, mode=prediction_mode)
+    try:
+        # 调用函数进行遍历识别
+        predict_folder(folder_path, model_path, num_classes, mode=prediction_mode)
+        print("\n预测任务已成功完成！")
+    except Exception as e:
+        print(f"预测过程中发生错误: {e}")
+        print("请检查路径和文件是否正确，然后重试。")
 
 
 if __name__ == '__main__':

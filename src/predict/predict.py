@@ -1,9 +1,16 @@
 import os
 import torch
 from PIL import Image
+import torch.nn.functional as F
+import sys
+
+# 将项目根目录添加到Python搜索路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, project_root)
+
 from src.models.cnn_model import ImprovedCNN
 from src.utils.transforms import val_transform
-import torch.nn.functional as F
 
 
 def predict_image(image_path, model_path, num_classes=10):

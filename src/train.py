@@ -4,9 +4,16 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision.datasets as datasets
 from tqdm import tqdm
+import os
+import sys
 
-from models.cnn_model import ImprovedCNN
-from utils.transforms import val_transform, train_transform
+# 将项目根目录添加到Python搜索路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
+
+from src.models.cnn_model import ImprovedCNN
+from src.utils.transforms import val_transform, train_transform
 
 
 
